@@ -392,21 +392,18 @@ const EXPORT_N = 100;
 function exportCsv() {
   const last = samples.slice(-EXPORT_N);
   if (!last.length) return;
-  const t0 = last[0].t;
   const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
-  ['x', 'y', 'z'].forEach((axis, k) => {
-    let csv = `echantillon,temps_ms,accel_${axis}_m_s2\r\n`;
-    last.forEach((s, i) => {
-      csv += `${i + 1},${(s.t - t0).toFixed(1)},${s.a[k].toFixed(4)}\r\n`;
-    });
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `accel_${axis}_${stamp}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+  let csv = 'accel_x_m_s2,accel_y_m_s2,accel_z_m_s2\r\n';
+  last.forEach(s => {
+    csv += `${s.a[0].toFixed(4)},${s.a[1].toFixed(4)},${s.a[2].toFixed(4)}\r\n`;
   });
-  setStatus(`Export CSV : ${last.length} échantillons × 3 axes.`);
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `accel_xyz_${stamp}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  setStatus(`Export CSV : ${last.length} échantillons (X, Y, Z).`);
 }
 
 btnE.addEventListener('click', exportCsv);
