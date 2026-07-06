@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MPU6050 — Moniteur 6 axes</title>
+<style>
+  :root {
+    --surface-1:      #fcfcfb;
+    --page:           #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --series-x:       #2a78d6;
+    --series-y:       #1baf7a;
+    --series-z:       #eda100;
+    --accent:         #2a78d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface-1:      #1a1a19;
+      --page:           #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --baseline:       #383835;
+      --border:         rgba(255,255,255,0.10);
+      --series-x:       #3987e5;
+      --series-y:       #199e70;
+      --series-z:       #c98500;
+      --accent:         #3987e5;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 24px;
+  }
+  header {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    margin-bottom: 20px;
+  }
+  h1 { font-size: 18px; font-weight: 650; margin: 0; }
+  #status { font-size: 13px; color: var(--text-secondary); }
+  #status.err { color: #d03b3b; }
+  button {
+    font: inherit; font-size: 14px; font-weight: 600;
+    padding: 8px 18px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--accent); color: #fff;
+  }
+  button.secondary { background: var(--surface-1); color: var(--text-primary); }
+  button:disabled { opacity: .45; cursor: default; }
+  .panel {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 16px 8px;
+    margin-bottom: 20px;
+  }
+  .panel h2 {
+    font-size: 14px; font-weight: 650; margin: 0 0 4px;
+  }
+  .panel .sub { font-size: 12px; color: var(--text-muted); margin: 0 0 10px; }
+  .legend {
+    display: flex; gap: 20px; flex-wrap: wrap;
+    font-size: 13px; margin: 0 0 10px;
+  }
+  .legend .item { display: flex; align-items: center; gap: 7px; }
+  .legend .chip { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+  .legend .name { color: var(--text-secondary); font-weight: 600; }
+  .legend .val {
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+    min-width: 62px; text-align: right;
+  }
+  .chart-wrap { position: relative; }
+  canvas { width: 100%; height: 240px; display: block; }
+  .tooltip {
+    position: absolute; pointer-events: none; display: none;
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; font-size: 12px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.15); white-space: nowrap; z-index: 2;
+  }
+  .tooltip .row { display: flex; align-items: center; gap: 6px; }
+  .tooltip .row .v { margin-left: auto; padding-left: 12px; font-variant-numeric: tabular-nums; }
+  .hint { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>MPU6050 — Moniteur 6 axes</h1>
+  <button id="btnConnect">Connecter</button>
+  <button id="btnDisconnect" class="secondary" disabled>Déconnecter</button>
+  <span id="status">Non connecté. Ferme le moniteur série de l’IDE Arduino, puis clique « Connecter ».</span>
+</header>
+
+<section class="panel">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+    <h2>Accélération</h2>
+    <button id="btnExport" class="secondary" disabled>Exporter CSV (X, Y, Z)</button>
+  </div>
+  <p class="sub">m/s² — fenêtre glissante ~10 s (50 Hz)</p>
+  <div class="legend" id="legendAccel"></div>
+  <div class="chart-wrap">
+    <canvas id="chartAccel"></canvas>
+    <div class="tooltip" id="tipAccel"></div>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Vitesse angulaire (gyroscope)</h2>
+  <p class="sub">°/s — fenêtre glissante ~10 s (50 Hz)</p>
+  <div class="legend" id="legendGyro"></div>
+  <div class="chart-wrap">
+    <canvas id="chartGyro"></canvas>
+    <div class="tooltip" id="tipGyro"></div>
+  </div>
+</section>
+
+<p class="hint">Nécessite Chrome ou Edge (Web Serial API). La carte doit émettre 6 valeurs séparées par tabulation à 115200 bauds.</p>
+
+<script>
+"use strict";
+
+const MAX_SAMPLES = 500;             // ~10 s @ 50 Hz
+const samples = [];                  // { t, a:[x,y,z], g:[x,y,z] }
+
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+let theme = {};
+function loadTheme() {
+  theme = {
+    surface: css('--surface-1'),
+    grid: css('--gridline'),
+    baseline: css('--baseline'),
+    muted: css('--text-muted'),
+    primary: css('--text-primary'),
+    series: [css('--series-x'), css('--series-y'), css('--series-z')],
+  };
+}
+loadTheme();
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', loadTheme);
+
+// ---------- Chart ----------
+function makeChart(canvasId, tipId, legendId, names, unit, pick) {
+  const canvas = document.getElementById(canvasId);
+  const ctx = canvas.getContext('2d');
+  const tip = document.getElementById(tipId);
+  const legend = document.getElementById(legendId);
+  let hoverIdx = -1;
+
+  const valEls = names.map((name, i) => {
+    const item = document.createElement('div');
+    item.className = 'item';
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    chip.style.background = `var(--series-${'xyz'[i]})`;
+    const nm = document.createElement('span');
+    nm.className = 'name';
+    nm.textContent = name;
+    const val = document.createElement('span');
+    val.className = 'val';
+    val.textContent = '—';
+    item.append(chip, nm, val);
+    legend.append(item);
+    return val;
+  });
+
+  const PAD = { l: 52, r: 12, t: 10, b: 22 };
+
+  function niceStep(range, target) {
+    const raw = range / target;
+    const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    for (const m of [1, 2, 5, 10]) if (m * mag >= raw) return m * mag;
+    return 10 * mag;
+  }
+
+  function draw() {
+    const dpr = devicePixelRatio || 1;
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+      canvas.width = w * dpr; canvas.height = h * dpr;
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    const n = samples.length;
+    // live values in the legend
+    if (n) pick(samples[n - 1]).forEach((v, i) => valEls[i].textContent = v.toFixed(2) + ' ' + unit);
+    if (n < 2) return;
+
+    let min = Infinity, max = -Infinity;
+    for (const s of samples) for (const v of pick(s)) { if (v < min) min = v; if (v > max) max = v; }
+    if (min === max) { min -= 1; max += 1; }
+    const padY = (max - min) * 0.12;
+    min -= padY; max += padY;
+
+    const iw = w - PAD.l - PAD.r, ih = h - PAD.t - PAD.b;
+    const t0 = samples[0].t, t1 = samples[n - 1].t, span = Math.max(t1 - t0, 1);
+    const X = t => PAD.l + (t - t0) / span * iw;
+    const Y = v => PAD.t + (max - v) / (max - min) * ih;
+
+    // grid + y labels
+    ctx.font = '11px system-ui, sans-serif';
+    ctx.fillStyle = theme.muted;
+    ctx.strokeStyle = theme.grid;
+    ctx.lineWidth = 1;
+    const step = niceStep(max - min, 5);
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    for (let v = Math.ceil(min / step) * step; v <= max; v += step) {
+      const y = Y(v);
+      ctx.beginPath(); ctx.moveTo(PAD.l, y); ctx.lineTo(w - PAD.r, y); ctx.stroke();
+      ctx.fillText(v.toFixed(Math.max(0, -Math.floor(Math.log10(step)))), PAD.l - 8, y);
+    }
+    // x labels (seconds ago)
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    for (let sec = 0; sec <= span / 1000; sec += 2) {
+      const t = t1 - sec * 1000;
+      if (t < t0) break;
+      ctx.textAlign = sec === 0 ? 'right' : 'center';
+      ctx.fillText(sec === 0 ? 'maintenant' : `−${sec} s`, X(t), h - PAD.b + 6);
+    }
+    // baseline
+    ctx.strokeStyle = theme.baseline;
+    ctx.beginPath(); ctx.moveTo(PAD.l, PAD.t + ih); ctx.lineTo(w - PAD.r, PAD.t + ih); ctx.stroke();
+
+    // series
+    ctx.lineWidth = 2; ctx.lineJoin = 'round';
+    for (let k = 0; k < 3; k++) {
+      ctx.strokeStyle = theme.series[k];
+      ctx.beginPath();
+      for (let i = 0; i < n; i++) {
+        const x = X(samples[i].t), y = Y(pick(samples[i])[k]);
+        i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+      }
+      ctx.stroke();
+    }
+
+    // crosshair + tooltip
+    if (hoverIdx >= 0 && hoverIdx < n) {
+      const s = samples[hoverIdx], x = X(s.t);
+      ctx.strokeStyle = theme.baseline;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath(); ctx.moveTo(x, PAD.t); ctx.lineTo(x, PAD.t + ih); ctx.stroke();
+      ctx.setLineDash([]);
+      const vals = pick(s);
+      for (let k = 0; k < 3; k++) {
+        ctx.fillStyle = theme.series[k];
+        ctx.beginPath(); ctx.arc(x, Y(vals[k]), 4, 0, 7); ctx.fill();
+        ctx.strokeStyle = theme.surface; ctx.lineWidth = 2; ctx.stroke();
+        ctx.lineWidth = 2;
+      }
+      tip.innerHTML = vals.map((v, k) =>
+        `<div class="row"><span class="chip" style="width:10px;height:10px;border-radius:2px;background:${theme.series[k]}"></span>` +
+        `<span style="color:var(--text-secondary)">${names[k]}</span><span class="v">${v.toFixed(2)} ${unit}</span></div>`).join('');
+      tip.style.display = 'block';
+      const wrap = canvas.parentElement.getBoundingClientRect();
+      const left = Math.min(x + 14, wrap.width - tip.offsetWidth - 4);
+      tip.style.left = left + 'px';
+      tip.style.top = '10px';
+    } else {
+      tip.style.display = 'none';
+    }
+  }
+
+  canvas.addEventListener('mousemove', e => {
+    const n = samples.length;
+    if (n < 2) { hoverIdx = -1; return; }
+    const r = canvas.getBoundingClientRect();
+    const frac = (e.clientX - r.left - PAD.l) / (r.width - PAD.l - PAD.r);
+    hoverIdx = Math.max(0, Math.min(n - 1, Math.round(frac * (n - 1))));
+  });
+  canvas.addEventListener('mouseleave', () => hoverIdx = -1);
+
+  return { draw };
+}
+
+const chartAccel = makeChart('chartAccel', 'tipAccel', 'legendAccel',
+  ['Accél X', 'Accél Y', 'Accél Z'], 'm/s²', s => s.a);
+const chartGyro = makeChart('chartGyro', 'tipGyro', 'legendGyro',
+  ['Gyro X', 'Gyro Y', 'Gyro Z'], '°/s', s => s.g);
+
+(function frame() { chartAccel.draw(); chartGyro.draw(); requestAnimationFrame(frame); })();
+
+// ---------- Web Serial ----------
+const btnC = document.getElementById('btnConnect');
+const btnD = document.getElementById('btnDisconnect');
+const statusEl = document.getElementById('status');
+let port = null, reader = null, keepReading = false;
+
+function setStatus(msg, err = false) {
+  statusEl.textContent = msg;
+  statusEl.className = err ? 'err' : '';
+}
+
+async function connect() {
+  if (!('serial' in navigator)) {
+    setStatus('Web Serial indisponible — utilise Chrome ou Edge.', true);
+    return;
+  }
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+  } catch (e) {
+    if (e.name === 'NotFoundError') return; // user cancelled the picker
+    setStatus('Impossible d’ouvrir le port : ' + e.message +
+      ' — le moniteur série de l’IDE Arduino est-il encore ouvert ?', true);
+    port = null;
+    return;
+  }
+  btnC.disabled = true; btnD.disabled = false;
+  setStatus('Connecté — en attente de données…');
+  keepReading = true;
+  readLoop();
+}
+
+async function readLoop() {
+  const decoder = new TextDecoder();
+  let carry = '';
+  try {
+    while (keepReading && port.readable) {
+      reader = port.readable.getReader();
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          carry += decoder.decode(value, { stream: true });
+          const lines = carry.split('\n');
+          carry = lines.pop();
+          for (const line of lines) handleLine(line);
+        }
+      } finally {
+        reader.releaseLock();
+        reader = null;
+      }
+    }
+  } catch (e) {
+    if (keepReading) setStatus('Liaison perdue (carte débranchée ?) : ' + e.message, true);
+  }
+  try { await port.close(); } catch (_) {}
+  port = null;
+  keepReading = false;
+  btnC.disabled = false; btnD.disabled = true;
+  if (!statusEl.className) setStatus('Déconnecté.');
+}
+
+let count = 0;
+function handleLine(line) {
+  const parts = line.trim().split(/\s+/);
+  if (parts.length !== 6) return;
+  const v = parts.map(Number);
+  if (v.some(x => !Number.isFinite(x))) return;
+  samples.push({ t: performance.now(), a: [v[0], v[1], v[2]], g: [v[3], v[4], v[5]] });
+  if (samples.length > MAX_SAMPLES) samples.shift();
+  btnE.disabled = false;
+  if (++count % 25 === 0) setStatus(`Connecté — ${count} échantillons reçus.`);
+}
+
+async function disconnect() {
+  keepReading = false;
+  setStatus('Déconnexion…');
+  try { if (reader) await reader.cancel(); } catch (_) {}
+}
+
+// Demo mode: open the page with #demo to see synthetic curves without the board
+if (location.hash === '#demo') {
+  setStatus('Mode démo — données synthétiques.');
+  setInterval(() => {
+    const t = performance.now() / 1000;
+    samples.push({
+      t: performance.now(),
+      a: [2 * Math.sin(t * 2), 2 * Math.cos(t * 1.3), 9.81 + 0.4 * Math.sin(t * 5)],
+      g: [40 * Math.sin(t * 1.1), 25 * Math.cos(t * 0.7), 10 * Math.sin(t * 3)],
+    });
+    if (samples.length > MAX_SAMPLES) samples.shift();
+    btnE.disabled = false;
+  }, 20);
+}
+
+// ---------- CSV export: last 100 accel samples, one file per axis ----------
+const btnE = document.getElementById('btnExport');
+const EXPORT_N = 100;
+
+function exportCsv() {
+  const last = samples.slice(-EXPORT_N);
+  if (!last.length) return;
+  const t0 = last[0].t;
+  const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
+  ['x', 'y', 'z'].forEach((axis, k) => {
+    let csv = `echantillon,temps_ms,accel_${axis}_m_s2\r\n`;
+    last.forEach((s, i) => {
+      csv += `${i + 1},${(s.t - t0).toFixed(1)},${s.a[k].toFixed(4)}\r\n`;
+    });
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `accel_${axis}_${stamp}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+  setStatus(`Export CSV : ${last.length} échantillons × 3 axes.`);
+}
+
+btnE.addEventListener('click', exportCsv);
+
+btnC.addEventListener('click', connect);
+btnD.addEventListener('click', disconnect);
+if ('serial' in navigator) {
+  navigator.serial.addEventListener('disconnect', () => {
+    if (port) setStatus('Carte débranchée.', true);
+  });
+} else {
+  setStatus('Web Serial indisponible — utilise Chrome ou Edge.', true);
+  btnC.disabled = true;
+}
+</script>
+</body>
+</html>
