@@ -74,6 +74,8 @@ async def _scenario_full():
             b = await sb.ws_connect("http://127.0.0.1:8800/ws")
             await a.send_json({"type": "join"})
             await b.send_json({"type": "join"})
+            await _recv_until(a, "joined")
+            await _recv_until(b, "joined")
             c = await sc.ws_connect("http://127.0.0.1:8800/ws")
             await c.send_json({"type": "join"})
             msg = await c.receive_json()
@@ -84,7 +86,42 @@ async def _scenario_full():
         await runner.cleanup()
 
 
+async def _scenario_disconnect():
+    """Deconnexion en cours de match -> l'autre joueur recoit opponentLeft,
+    et le serveur ne crashe pas (regression: mutation de dict pendant iteration)."""
+    app = make_app(countdown_step=0.02, collect_timeout=0.5)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 8801)
+    await site.start()
+    try:
+        async with ClientSession() as sa, ClientSession() as sb:
+            a = await sa.ws_connect("http://127.0.0.1:8801/ws")
+            b = await sb.ws_connect("http://127.0.0.1:8801/ws")
+            await a.send_json({"type": "join"})
+            await b.send_json({"type": "join"})
+
+            await _recv_until(a, "start")
+            await _recv_until(b, "start")
+
+            # au moins un round complet pour que la boucle de round soit
+            # activement en train de diffuser (countdown/go/round)
+            await _play_one_round(a, b, "rock", "scissors")
+
+            # coupe A en plein match, avant/autour du prochain decompte
+            await a.close()
+
+            mb = await _recv_until(b, "opponentLeft")
+            assert mb["type"] == "opponentLeft"
+
+            await b.close()
+        print("PASS e2e: deconnexion en cours de match -> opponentLeft")
+    finally:
+        await runner.cleanup()
+
+
 if __name__ == "__main__":
     asyncio.run(_scenario())
     asyncio.run(_scenario_full())
+    asyncio.run(_scenario_disconnect())
     print("\nOK — e2e serveur")

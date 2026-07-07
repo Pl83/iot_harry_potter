@@ -30,6 +30,7 @@ class Player:
         self.ws = ws
         self.role = role          # "a" ou "b"
         self.move = None          # coup du round courant
+        self.conf = None          # confiance du coup courant
         self.rematch = False
 
     async def send(self, **payload):
@@ -76,7 +77,7 @@ class GameServer:
 
     async def _start_match(self):
         self.match = Match()
-        for role, p in self.players.items():
+        for role, p in list(self.players.items()):
             p.rematch = False
             await p.send(type="start", lives={"you": 3, "opp": 3})
         self._round_task = asyncio.create_task(self._run_rounds())
@@ -84,8 +85,9 @@ class GameServer:
     async def _run_rounds(self):
         try:
             while self.match is not None and len(self.players) == 2:
-                for role, p in self.players.items():
+                for role, p in list(self.players.items()):
                     p.move = None
+                    p.conf = None
                 self._moves_event.clear()
 
                 for n in (3, 2, 1):
@@ -109,7 +111,7 @@ class GameServer:
                     if not await self._await_rematch():
                         return
                     self.match = Match()
-                    for p in self.players.values():
+                    for p in list(self.players.values()):
                         p.rematch = False
                         await p.send(type="start", lives={"you": 3, "opp": 3})
                 else:
@@ -123,8 +125,9 @@ class GameServer:
             await asyncio.sleep(0.05)
         return len(self.players) == 2 and all(p.rematch for p in self.players.values())
 
-    def record_move(self, player, move):
+    def record_move(self, player, move, conf=None):
         player.move = move if move in ("rock", "paper", "scissors") else "whiff"
+        player.conf = conf
         if all(p.move is not None for p in self.players.values()) and len(self.players) == 2:
             self._moves_event.set()
 
@@ -134,7 +137,7 @@ class GameServer:
 
     async def _send_round(self, move_a, move_b, result):
         moves = {"a": move_a, "b": move_b}
-        for role, p in self.players.items():
+        for role, p in list(self.players.items()):
             other = self._other(role)
             if result["winner"] == "tie":
                 winner = "tie"
@@ -144,14 +147,14 @@ class GameServer:
                 winner = "opp"
             await p.send(
                 type="round",
-                you={"move": moves[role], "conf": None},
-                opp={"move": moves[other], "conf": None},
+                you={"move": moves[role], "conf": self.players[role].conf},
+                opp={"move": moves[other], "conf": self.players[other].conf},
                 winner=winner,
                 lives={"you": result["lives"][role], "opp": result["lives"][other]},
             )
 
     async def _send_match_over(self, match_winner):
-        for role, p in self.players.items():
+        for role, p in list(self.players.items()):
             await p.send(type="matchOver",
                          winner="you" if match_winner == role else "opp")
 
@@ -175,7 +178,7 @@ async def ws_handler(request):
                 await ws.close()
                 return ws
         elif t == "move" and player is not None:
-            server.record_move(player, data.get("move"))
+            server.record_move(player, data.get("move"), data.get("conf"))
         elif t == "rematch" and player is not None:
             player.rematch = True
     if player is not None:
@@ -183,9 +186,9 @@ async def ws_handler(request):
     return ws
 
 
-def _static_handler(filename, content_type):
+def _static_handler(filename, content_type, web_dir):
     async def handler(request):
-        path = WEB_DIR / filename
+        path = web_dir / filename
         if not path.exists():
             return web.Response(status=404, text=f"{filename} introuvable")
         return web.Response(body=path.read_bytes(), content_type=content_type.split(";")[0],
@@ -194,10 +197,11 @@ def _static_handler(filename, content_type):
 
 
 def make_app(web_dir=None, countdown_step=1.0, collect_timeout=2.5):
+    effective_web_dir = Path(web_dir) if web_dir is not None else WEB_DIR
     app = web.Application()
     app["game"] = GameServer(countdown_step=countdown_step, collect_timeout=collect_timeout)
     for route, (filename, ctype) in STATIC_FILES.items():
-        app.router.add_get(route, _static_handler(filename, ctype))
+        app.router.add_get(route, _static_handler(filename, ctype, effective_web_dir))
     app.router.add_get("/ws", ws_handler)
     return app
 
