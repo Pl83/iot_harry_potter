@@ -1,0 +1,5 @@
+# Transitoire: extraction des zips de la classe (regenerable via les .zip)
+data/_extract/
+
+# Archives brutes des groupes (source de verite, lourdes)
+data/*.zip

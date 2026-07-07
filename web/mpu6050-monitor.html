@@ -92,6 +92,78 @@
   .tooltip .row { display: flex; align-items: center; gap: 6px; }
   .tooltip .row .v { margin-left: auto; padding-left: 12px; font-variant-numeric: tabular-nums; }
   .hint { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+  /* ---------- Onglets ---------- */
+  .tabs {
+    display: flex; gap: 4px; margin-bottom: 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .tabs button {
+    background: transparent; color: var(--text-secondary);
+    border: none; border-bottom: 2px solid transparent; border-radius: 0;
+    padding: 10px 18px; margin-bottom: -1px;
+  }
+  .tabs button:hover { color: var(--text-primary); }
+  .tabs button.active {
+    color: var(--text-primary); border-bottom-color: var(--accent);
+  }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* ---------- Galerie de schémas ---------- */
+  .schema-group { margin-bottom: 34px; }
+  .schema-group > h2 {
+    font-size: 15px; font-weight: 650; margin: 0 0 14px;
+    padding-bottom: 6px; border-bottom: 1px solid var(--border);
+  }
+  figure.schema {
+    margin: 0 0 20px; background: var(--surface-1);
+    border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px; overflow-x: auto;
+  }
+  figure.schema img {
+    width: 100%; max-width: 900px; height: auto; display: block;
+    border-radius: 8px; background: #fff;
+  }
+  figure.schema figcaption { margin-top: 14px; max-width: 900px; }
+  figure.schema figcaption h3 {
+    font-size: 14px; font-weight: 650; margin: 0 0 5px;
+  }
+  figure.schema figcaption p {
+    font-size: 13px; color: var(--text-secondary);
+    margin: 0; line-height: 1.55;
+  }
+  .intro { font-size: 13px; color: var(--text-secondary); margin: 0 0 24px; line-height: 1.55; }
+
+  /* ---------- Test live ---------- */
+  .live-waiting { font-size: 14px; color: var(--text-secondary); padding: 22px 0; line-height: 1.55; }
+  .live-result { display: flex; gap: 32px; flex-wrap: wrap; align-items: center; padding: 8px 0 12px; }
+  .live-pred-wrap { min-width: 200px; }
+  .live-pred {
+    font-size: 42px; font-weight: 700; letter-spacing: -0.5px; line-height: 1.1;
+    text-transform: capitalize;
+  }
+  .live-conf { font-size: 14px; color: var(--text-secondary); margin-top: 6px; }
+  .live-bars { flex: 1; min-width: 280px; display: flex; flex-direction: column; gap: 11px; }
+  .live-bar-row { display: flex; align-items: center; gap: 12px; font-size: 13px; }
+  .live-bar-row .lbl {
+    width: 90px; color: var(--text-secondary); font-weight: 600;
+    text-transform: capitalize;
+  }
+  .live-bar-track {
+    flex: 1; height: 15px; background: var(--gridline);
+    border-radius: 8px; overflow: hidden;
+  }
+  .live-bar-fill {
+    height: 100%; width: 0; background: var(--baseline);
+    border-radius: 8px; transition: width .12s linear;
+  }
+  .live-bar-row .pct {
+    width: 44px; text-align: right; font-variant-numeric: tabular-nums;
+    color: var(--text-secondary);
+  }
+  .live-bar-row.top .lbl, .live-bar-row.top .pct { color: var(--text-primary); }
+  .live-bar-row.top .live-bar-fill { background: var(--series-y); }
 </style>
 </head>
 <body>
@@ -102,6 +174,14 @@
   <button id="btnDisconnect" class="secondary" disabled>Déconnecter</button>
   <span id="status">Non connecté. Ferme le moniteur série de l’IDE Arduino, puis clique « Connecter ».</span>
 </header>
+
+<nav class="tabs">
+  <button class="active" data-tab="monitor">Moniteur</button>
+  <button data-tab="schemas">Schémas</button>
+  <button data-tab="live">Test live</button>
+</nav>
+
+<div id="tab-monitor" class="tab-panel active">
 
 <section class="panel">
   <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
@@ -128,8 +208,126 @@
 
 <p class="hint">Nécessite Chrome ou Edge (Web Serial API). La carte doit émettre 6 valeurs séparées par tabulation à 115200 bauds.</p>
 
+</div><!-- /tab-monitor -->
+
+<div id="tab-schemas" class="tab-panel">
+
+  <p class="intro">Le pipeline de classification des mouvements, étape par étape — des données brutes au modèle exporté. Chaque schéma est généré par les scripts du dossier <code>scripts/</code> et enregistré dans <code>figures/</code>.</p>
+
+  <div class="schema-group">
+    <h2>1 — Comprendre les données</h2>
+    <figure class="schema">
+      <img src="../figures/signals_per_class.png" alt="Signaux types par classe" loading="lazy">
+      <figcaption>
+        <h3>Signaux types par classe</h3>
+        <p>Chaque ligne est une classe de mouvement, chaque colonne un axe (ax, ay, az). Les courbes fines sont des exemples réels, la courbe épaisse la moyenne. Les données étant normalisées en z-score par fichier, les moyennes sont quasi plates : la séparation ne vient pas de l'amplitude mais de la <strong>forme et de la dynamique</strong> du signal — c'est ce que le CNN doit apprendre.</p>
+      </figcaption>
+    </figure>
+    <figure class="schema">
+      <img src="../figures/class_distribution.png" alt="Distribution des classes" loading="lazy">
+      <figcaption>
+        <h3>Distribution des classes</h3>
+        <p>Effectifs par classe dans les splits train / val / test (stratifié, seed=42). Le split d'entraînement est quasi équilibré (ratio max/min = 1.08), ce qui justifie l'absence de pondération dans la fonction de perte.</p>
+      </figcaption>
+    </figure>
+  </div>
+
+  <div class="schema-group">
+    <h2>2 — Le modèle</h2>
+    <figure class="schema">
+      <img src="../figures/architecture.png" alt="Architecture du MovementCNN" loading="lazy">
+      <figcaption>
+        <h3>Architecture du MovementCNN</h3>
+        <p>Flux des formes de tenseur (canaux × longueur) à travers le réseau : trois blocs Conv1d + BatchNorm + ReLU, deux MaxPool, puis un AdaptiveAvgPool qui écrase la dimension temporelle, enfin Dropout + Linear vers 4 classes. Environ 9 540 paramètres — une lame légère, adaptée aux ~1 600 échantillons d'entraînement pour limiter le sur-apprentissage.</p>
+      </figcaption>
+    </figure>
+  </div>
+
+  <div class="schema-group">
+    <h2>3 — Criterion / Optim</h2>
+    <figure class="schema">
+      <img src="../figures/overfit_batch.png" alt="Sur-apprentissage d'un batch" loading="lazy">
+      <figcaption>
+        <h3>Sur-apprentissage d'un batch</h3>
+        <p>Test de sanité : on force le modèle à mémoriser un unique batch réel. La loss s'effondre et l'accuracy monte à 1.0 — preuve que la loss (CrossEntropy) et l'optimizer (Adam) descendent correctement, et que la machinerie d'entraînement est saine.</p>
+      </figcaption>
+    </figure>
+    <figure class="schema">
+      <img src="../figures/lr_range_test.png" alt="LR range test" loading="lazy">
+      <figcaption>
+        <h3>LR range test</h3>
+        <p>On augmente le learning rate exponentiellement et on observe la loss. La zone de descente saine s'étend de ~1e-3 à ~5e-2 ; au-delà de ~1e-1, la loss explose. Le taux choisi (1e-3, trait rouge) est conservateur, au début de la pente ; le scheduler ReduceLROnPlateau l'ajuste ensuite automatiquement.</p>
+      </figcaption>
+    </figure>
+  </div>
+
+  <div class="schema-group">
+    <h2>4 — Entraînement</h2>
+    <figure class="schema">
+      <img src="../figures/training_curves.png" alt="Courbes d'apprentissage" loading="lazy">
+      <figcaption>
+        <h3>Courbes d'apprentissage</h3>
+        <p>Loss et accuracy train / val au fil des epochs. Meilleur modèle à l'epoch 30 (val accuracy 95.4 %), sauvegardé automatiquement. La loss val plafonne tandis que la loss train continue de descendre : un léger sur-apprentissage, contenu par le Dropout (0.3), le weight decay et l'early stopping (patience 15).</p>
+      </figcaption>
+    </figure>
+  </div>
+
+  <div class="schema-group">
+    <h2>5 — Test (données jamais vues)</h2>
+    <figure class="schema">
+      <img src="../figures/confusion_matrix.png" alt="Matrice de confusion" loading="lazy">
+      <figcaption>
+        <h3>Matrice de confusion</h3>
+        <p>Évaluation sur les 348 échantillons de test jamais vus. La diagonale domine largement (accuracy globale 96.3 %, supérieure à la validation) ; les rares erreurs sont éparses, principalement entre <em>circle</em> et <em>vertical</em>. Aucune confusion systématique.</p>
+      </figcaption>
+    </figure>
+    <figure class="schema">
+      <img src="../figures/per_class_metrics.png" alt="Métriques par classe" loading="lazy">
+      <figcaption>
+        <h3>Métriques par classe</h3>
+        <p>Precision, recall et f1 par classe sur le test. Scores homogènes (f1 de 0.95 à 0.97) : aucune classe n'est un maillon faible. Le modèle est ensuite exporté au format ONNX (<code>models/movement_cnn.onnx</code>), fidèle au bit près à la version PyTorch.</p>
+      </figcaption>
+    </figure>
+  </div>
+
+</div><!-- /tab-schemas -->
+
+<div id="tab-live" class="tab-panel">
+  <section class="panel">
+    <h2>Reconnaissance de mouvement en direct</h2>
+    <p class="sub">Le modèle analyse les 2 dernières secondes d'accélération (100 points, 50 Hz) et prédit le geste, ~7 fois par seconde.</p>
+    <div id="liveWaiting" class="live-waiting">
+      Connecte la carte avec le bouton « Connecter » en haut, puis exécute un geste :
+      <strong>cercle</strong>, <strong>horizontal</strong>, <strong>statique</strong> ou <strong>vertical</strong>.
+    </div>
+    <div id="liveResult" class="live-result" hidden>
+      <div class="live-pred-wrap">
+        <div id="livePred" class="live-pred">—</div>
+        <div id="liveConf" class="live-conf"></div>
+      </div>
+      <div id="liveBars" class="live-bars"></div>
+    </div>
+  </section>
+  <p class="hint">Le modèle lit l'<strong>accéléromètre</strong> (pas le gyroscope). Reproduis les gestes tels qu'enregistrés à l'entraînement pour de meilleurs résultats. Inférence 100 % locale, dans le navigateur.</p>
+</div><!-- /tab-live -->
+
+<script src="movement_cnn_weights.js"></script>
 <script>
 "use strict";
+
+// ---------- Onglets ----------
+let liveActive = false;
+document.querySelectorAll('.tabs button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const tab = btn.dataset.tab;
+    document.querySelectorAll('.tabs button').forEach(b =>
+      b.classList.toggle('active', b === btn));
+    document.querySelectorAll('.tab-panel').forEach(p =>
+      p.classList.toggle('active', p.id === 'tab-' + tab));
+    liveActive = (tab === 'live');
+    if (liveActive) runInference();
+  });
+});
 
 const MAX_SAMPLES = 500;             // ~10 s @ 50 Hz
 const samples = [];                  // { t, a:[x,y,z], g:[x,y,z] }
@@ -384,6 +582,142 @@ if (location.hash === '#demo') {
     btnE.disabled = false;
   }, 20);
 }
+
+// ---------- Inférence live (forward pass JS pur) ----------
+const MODEL = window.MODEL_WEIGHTS || null;
+const INFER_WIN = MODEL ? MODEL.seq_len : 100;
+
+function fwdConv(x, L) {
+  const W = L.weight, b = L.bias, pad = L.pad;
+  const inC = x.length, len = x[0].length;
+  const outC = W.length, k = W[0][0].length;
+  const padded = x.map(ch => { const p = new Float64Array(len + 2 * pad); p.set(ch, pad); return p; });
+  const lout = len + 2 * pad - k + 1;
+  const out = [];
+  for (let oc = 0; oc < outC; oc++) {
+    const acc = new Float64Array(lout);
+    for (let ic = 0; ic < inC; ic++) {
+      const wk = W[oc][ic], pc = padded[ic];
+      for (let kk = 0; kk < k; kk++) {
+        const wv = wk[kk];
+        for (let i = 0; i < lout; i++) acc[i] += wv * pc[i + kk];
+      }
+    }
+    const bo = b[oc];
+    for (let i = 0; i < lout; i++) acc[i] += bo;
+    out.push(acc);
+  }
+  return out;
+}
+function fwdBN(x, L) {
+  const w = L.weight, b = L.bias, m = L.mean, v = L.var, eps = L.eps;
+  return x.map((ch, c) => {
+    const scale = w[c] / Math.sqrt(v[c] + eps), shift = b[c] - m[c] * scale;
+    const o = new Float64Array(ch.length);
+    for (let i = 0; i < ch.length; i++) o[i] = ch[i] * scale + shift;
+    return o;
+  });
+}
+function fwdReLU(x) {
+  return x.map(ch => { const o = new Float64Array(ch.length); for (let i = 0; i < ch.length; i++) o[i] = ch[i] > 0 ? ch[i] : 0; return o; });
+}
+function fwdMaxPool(x, L) {
+  const s = L.size;
+  return x.map(ch => {
+    const lout = Math.floor(ch.length / s), o = new Float64Array(lout);
+    for (let i = 0; i < lout; i++) { let mx = -Infinity; for (let j = 0; j < s; j++) { const val = ch[i * s + j]; if (val > mx) mx = val; } o[i] = mx; }
+    return o;
+  });
+}
+function fwdAvgPool(x) {
+  return x.map(ch => { let s = 0; for (let i = 0; i < ch.length; i++) s += ch[i]; return new Float64Array([s / ch.length]); });
+}
+function fwdLinear(x, L) {
+  const flat = []; for (const ch of x) for (const v of ch) flat.push(v);
+  const W = L.weight, b = L.bias, out = new Float64Array(W.length);
+  for (let o = 0; o < W.length; o++) { let s = b[o]; const wr = W[o]; for (let i = 0; i < flat.length; i++) s += wr[i] * flat[i]; out[o] = s; }
+  return out;
+}
+function forward(x) {
+  let a = x;
+  for (const L of MODEL.layers) {
+    switch (L.type) {
+      case 'conv': a = fwdConv(a, L); break;
+      case 'bn': a = fwdBN(a, L); break;
+      case 'relu': a = fwdReLU(a); break;
+      case 'maxpool': a = fwdMaxPool(a, L); break;
+      case 'avgpool': a = fwdAvgPool(a); break;
+      case 'linear': return fwdLinear(a, L);   // logits bruts
+    }
+  }
+  return a;
+}
+function softmax(z) {
+  let mx = -Infinity; for (const v of z) if (v > mx) mx = v;
+  const e = z.map(v => Math.exp(v - mx)); const s = e.reduce((a, b) => a + b, 0);
+  return e.map(v => v / s);
+}
+
+// Prépare l'entrée: 100 derniers accel, z-score par axe (parité entraînement).
+function buildInput() {
+  if (samples.length < INFER_WIN) return null;
+  const win = samples.slice(-INFER_WIN);
+  const ch = [new Float64Array(INFER_WIN), new Float64Array(INFER_WIN), new Float64Array(INFER_WIN)];
+  for (let i = 0; i < INFER_WIN; i++) { const a = win[i].a; ch[0][i] = a[0]; ch[1][i] = a[1]; ch[2][i] = a[2]; }
+  for (let c = 0; c < 3; c++) {
+    let mean = 0; for (let i = 0; i < INFER_WIN; i++) mean += ch[c][i]; mean /= INFER_WIN;
+    let vv = 0; for (let i = 0; i < INFER_WIN; i++) { const d = ch[c][i] - mean; vv += d * d; } vv /= INFER_WIN;
+    const sd = Math.sqrt(vv) || 1e-8;
+    for (let i = 0; i < INFER_WIN; i++) ch[c][i] = (ch[c][i] - mean) / sd;
+  }
+  return ch;
+}
+
+// Barres de confiance (une par classe), construites depuis les poids.
+const liveWaitingEl = document.getElementById('liveWaiting');
+const liveResultEl = document.getElementById('liveResult');
+const livePredEl = document.getElementById('livePred');
+const liveConfEl = document.getElementById('liveConf');
+const liveBarFills = [], liveBarPcts = [], liveBarRows = [];
+if (MODEL) {
+  const bars = document.getElementById('liveBars');
+  MODEL.classes.forEach(c => {
+    const row = document.createElement('div'); row.className = 'live-bar-row';
+    const lbl = document.createElement('span'); lbl.className = 'lbl'; lbl.textContent = c;
+    const track = document.createElement('div'); track.className = 'live-bar-track';
+    const fill = document.createElement('div'); fill.className = 'live-bar-fill';
+    track.append(fill);
+    const pct = document.createElement('span'); pct.className = 'pct'; pct.textContent = '0%';
+    row.append(lbl, track, pct);
+    bars.append(row);
+    liveBarRows.push(row); liveBarFills.push(fill); liveBarPcts.push(pct);
+  });
+} else {
+  liveWaitingEl.innerHTML = 'Poids du modèle introuvables (movement_cnn_weights.js). ' +
+    'Lance <code>python scripts/export_web_weights.py</code>.';
+}
+
+function runInference() {
+  if (!MODEL || !liveActive) return;
+  if (samples.length < INFER_WIN) {
+    liveResultEl.hidden = true; liveWaitingEl.hidden = false;
+    if (samples.length > 0)
+      liveWaitingEl.textContent = `Acquisition… ${samples.length}/${INFER_WIN} échantillons (~2 s de mouvement).`;
+    return;
+  }
+  const probs = softmax(Array.from(forward(buildInput())));
+  let best = 0; for (let i = 1; i < probs.length; i++) if (probs[i] > probs[best]) best = i;
+  liveWaitingEl.hidden = true; liveResultEl.hidden = false;
+  livePredEl.textContent = MODEL.classes[best];
+  liveConfEl.textContent = 'confiance ' + (probs[best] * 100).toFixed(0) + ' %';
+  probs.forEach((p, i) => {
+    liveBarFills[i].style.width = (p * 100).toFixed(1) + '%';
+    liveBarPcts[i].textContent = (p * 100).toFixed(0) + '%';
+    liveBarRows[i].classList.toggle('top', i === best);
+  });
+}
+
+setInterval(runInference, 140);   // ~7 Hz, uniquement quand l'onglet live est actif
 
 // ---------- CSV export: last 100 accel samples, one file per axis ----------
 const btnE = document.getElementById('btnExport');
