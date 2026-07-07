@@ -136,8 +136,10 @@ class GameServer:
             await p.send(**payload)
 
     async def _send_round(self, move_a, move_b, result):
+        snapshot = list(self.players.items())
         moves = {"a": move_a, "b": move_b}
-        for role, p in list(self.players.items()):
+        confs = {role: p.conf for role, p in snapshot}
+        for role, p in snapshot:
             other = self._other(role)
             if result["winner"] == "tie":
                 winner = "tie"
@@ -147,8 +149,8 @@ class GameServer:
                 winner = "opp"
             await p.send(
                 type="round",
-                you={"move": moves[role], "conf": self.players[role].conf},
-                opp={"move": moves[other], "conf": self.players[other].conf},
+                you={"move": moves[role], "conf": confs.get(role)},
+                opp={"move": moves[other], "conf": confs.get(other)},
                 winner=winner,
                 lives={"you": result["lives"][role], "opp": result["lives"][other]},
             )
