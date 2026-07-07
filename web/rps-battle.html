@@ -159,7 +159,7 @@ ws.addEventListener('message', ev => {
     case 'full': setStatus('Partie pleine. Réessaie plus tard.'); break;
     case 'start':
       showLives(m.lives.you, m.lives.opp); resetRoundUI();
-      el('btnRematch').hidden = true; el('countdown').textContent = '—';
+      el('btnRematch').hidden = true; el('btnRematch').disabled = false; el('countdown').textContent = '—';
       setStatus('Match ! Prépare ton geste.');
       break;
     case 'countdown':
