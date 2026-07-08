@@ -17,6 +17,14 @@ async def _recv_until(ws, wanted):
             return msg
 
 
+async def _join_and_ready(ws, name):
+    """Nouveau protocole : join{name} puis ready. Renvoie le message joined."""
+    await ws.send_json({"type": "join", "name": name})
+    joined = await _recv_until(ws, "joined")
+    await ws.send_json({"type": "ready"})
+    return joined
+
+
 async def _play_one_round(a, b, move_a, move_b):
     """Attend go, envoie les coups, renvoie les deux messages round."""
     await _recv_until(a, "go")
@@ -38,18 +46,24 @@ async def _scenario():
         async with ClientSession() as sa, ClientSession() as sb:
             a = await sa.ws_connect("http://127.0.0.1:8799/ws")
             b = await sb.ws_connect("http://127.0.0.1:8799/ws")
-            await a.send_json({"type": "join"})
-            await b.send_json({"type": "join"})
+            await _join_and_ready(a, "Alice")
+            await _join_and_ready(b, "Bob")
 
             sa_start = await _recv_until(a, "start")
-            await _recv_until(b, "start")
+            sb_start = await _recv_until(b, "start")
             assert sa_start["lives"] == {"you": 3, "opp": 3}
+            # les noms circulent des le debut du match
+            assert sa_start["you"]["name"] == "Alice"
+            assert sa_start["opp"]["name"] == "Bob"
+            assert sb_start["opp"]["name"] == "Alice"
 
             # a gagne 3 fois (rock > scissors) -> b tombe a 0
             for _ in range(3):
                 ra, rb = await _play_one_round(a, b, "rock", "scissors")
                 assert ra["winner"] == "you"
                 assert rb["winner"] == "opp"
+                # le round transporte aussi les noms
+                assert ra["you"]["name"] == "Alice" and ra["opp"]["name"] == "Bob"
 
             ma = await _recv_until(a, "matchOver")
             mb = await _recv_until(b, "matchOver")
@@ -99,8 +113,8 @@ async def _scenario_disconnect():
         async with ClientSession() as sa, ClientSession() as sb:
             a = await sa.ws_connect("http://127.0.0.1:8801/ws")
             b = await sb.ws_connect("http://127.0.0.1:8801/ws")
-            await a.send_json({"type": "join"})
-            await b.send_json({"type": "join"})
+            await _join_and_ready(a, "Alice")
+            await _join_and_ready(b, "Bob")
 
             await _recv_until(a, "start")
             await _recv_until(b, "start")
@@ -117,6 +131,48 @@ async def _scenario_disconnect():
 
             await b.close()
         print("PASS e2e: deconnexion en cours de match -> opponentLeft")
+    finally:
+        await runner.cleanup()
+
+
+async def _scenario_rematch():
+    """Fin de match -> ready remis a False (lobby) -> les 2 rejouent -> nouveau
+    match, noms conserves."""
+    app = make_app(countdown_step=0.02, collect_timeout=0.5)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 8802)
+    await site.start()
+    try:
+        async with ClientSession() as sa, ClientSession() as sb:
+            a = await sa.ws_connect("http://127.0.0.1:8802/ws")
+            b = await sb.ws_connect("http://127.0.0.1:8802/ws")
+            await _join_and_ready(a, "Alice")
+            await _join_and_ready(b, "Bob")
+            await _recv_until(a, "start")
+            await _recv_until(b, "start")
+
+            for _ in range(3):
+                await _play_one_round(a, b, "rock", "scissors")
+            await _recv_until(a, "matchOver")
+            await _recv_until(b, "matchOver")
+
+            # le salon revient, ready remis a False cote serveur
+            la = await _recv_until(a, "lobby")
+            lb = await _recv_until(b, "lobby")
+            assert la["you"]["ready"] is False, la
+            assert lb["you"]["ready"] is False, lb
+
+            # revanche : les 2 reppuient
+            await a.send_json({"type": "ready"})
+            await b.send_json({"type": "ready"})
+            sa2 = await _recv_until(a, "start")
+            sb2 = await _recv_until(b, "start")
+            assert sa2["lives"] == {"you": 3, "opp": 3}
+            assert sa2["you"]["name"] == "Alice" and sa2["opp"]["name"] == "Bob"
+            assert sb2["you"]["name"] == "Bob"
+            await a.close(); await b.close()
+        print("PASS e2e: revanche via ready apres reset du salon")
     finally:
         await runner.cleanup()
 
@@ -166,5 +222,6 @@ if __name__ == "__main__":
     asyncio.run(_scenario())
     asyncio.run(_scenario_full())
     asyncio.run(_scenario_disconnect())
+    asyncio.run(_scenario_rematch())
     asyncio.run(_scenario_send_round_race())
     print("\nOK — e2e serveur")

@@ -20,6 +20,9 @@
            cursor:pointer; border:1px solid var(--border); background:var(--accent); color:#fff; }
   button.secondary { background:var(--surface); color:var(--text); }
   button:disabled { opacity:.45; cursor:default; }
+  input#name { font:inherit; font-size:14px; padding:8px 12px; border-radius:8px;
+               border:1px solid var(--border); background:var(--surface); color:var(--text); width:150px; }
+  input#name:disabled { opacity:.6; }
   #status { font-size:13px; color:var(--muted); }
   .panel { background:var(--surface); border:1px solid var(--border); border-radius:12px;
            padding:20px; margin-bottom:20px; }
@@ -38,26 +41,28 @@
 <body>
 <header>
   <h1>Duel — Pierre / Feuille / Ciseaux par gestes</h1>
-  <button id="btnConnect">Connecter la carte</button>
-  <span id="status">Connecte ta carte, l'adversaire fait de même. Le match démarre à deux.</span>
+  <input id="name" type="text" maxlength="16" placeholder="Ton pseudo" autocomplete="off">
+  <button id="btnConnect" class="secondary">Connecter la carte</button>
+  <button id="btnReady" disabled>Prêt</button>
+  <span id="status">Entre ton pseudo, connecte ta carte, puis appuie sur « Prêt ».</span>
 </header>
 
 <section class="panel">
   <div class="lives">
-    <span>Toi : <span id="livesYou" class="hearts">— — —</span></span>
-    <span><span id="livesOpp" class="hearts">— — —</span> : Adversaire</span>
+    <span><span id="nameYou">Toi</span> : <span id="livesYou" class="hearts">— — —</span></span>
+    <span><span id="livesOpp" class="hearts">— — —</span> : <span id="nameOpp">Adversaire</span></span>
   </div>
 </section>
 
 <section class="panel">
   <div id="countdown" class="countdown">—</div>
   <div id="reveal" class="reveal" hidden>
-    <div><div id="moveYou" class="move">?</div><div class="who">toi</div></div>
+    <div><div id="moveYou" class="move">?</div><div id="whoYou" class="who">toi</div></div>
     <div style="font-size:24px;color:var(--muted)">vs</div>
-    <div><div id="moveOpp" class="move">?</div><div class="who">adversaire</div></div>
+    <div><div id="moveOpp" class="move">?</div><div id="whoOpp" class="who">adversaire</div></div>
   </div>
   <div id="verdict" class="verdict"></div>
-  <button id="btnRematch" class="secondary" hidden>Revanche</button>
+  <button id="btnRematch" class="secondary" hidden>Rejouer</button>
 </section>
 
 <p class="mapping">Gestes : <strong>vertical</strong> = pierre · <strong>horizontal</strong> = feuille · <strong>circle</strong> = ciseaux. Exécute ton geste <strong>pendant le décompte</strong> — le modèle lit les 2 dernières secondes de l'accéléromètre.</p>
@@ -82,7 +87,8 @@ async function connect() {
   try { port = await navigator.serial.requestPort(); await port.open({ baudRate: 115200 }); }
   catch (e) { if (e.name !== 'NotFoundError') setStatus('Ouverture impossible : ' + e.message); port = null; return; }
   btnConnect.disabled = true;
-  setStatus('Carte connectée. En attente de l\'adversaire / du décompte.');
+  btnConnect.textContent = 'Carte connectée ✓';
+  setStatus('Carte connectée. Entre ton pseudo et appuie sur « Prêt ».');
   keepReading = true; readLoop();
 }
 async function readLoop() {
@@ -147,19 +153,39 @@ function hearts(n) { return "❤".repeat(Math.max(0, n)) + "·".repeat(Math.max(
 function showLives(you, opp) { el('livesYou').textContent = hearts(you); el('livesOpp').textContent = hearts(opp); }
 function resetRoundUI() { el('reveal').hidden = true; el('verdict').textContent = ''; el('verdict').className = 'verdict'; }
 
+// ---------- Pseudo + bouton Prêt ----------
+const nameInput = el('name');
+const btnReady = el('btnReady');
+let joined = false;
+
+function setNames(you, opp) {
+  if (you) { el('nameYou').textContent = you; el('whoYou').textContent = you; }
+  if (opp) { el('nameOpp').textContent = opp; el('whoOpp').textContent = opp; }
+}
+
+nameInput.addEventListener('input', () => {
+  if (!joined) btnReady.disabled = nameInput.value.trim() === '';
+});
+
 // ---------- WebSocket ----------
 const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
-ws.addEventListener('open', () => ws.send(JSON.stringify({ type: 'join' })));
+ws.addEventListener('open', () => setStatus('Connecté. Entre ton pseudo et appuie sur « Prêt ».'));
 ws.addEventListener('close', () => setStatus('Déconnecté du serveur.'));
 ws.addEventListener('message', ev => {
   const m = JSON.parse(ev.data);
   switch (m.type) {
-    case 'joined': setStatus('Rejoint comme joueur ' + m.role + '.'); break;
-    case 'waiting': setStatus('En attente de l\'adversaire…'); break;
-    case 'full': setStatus('Partie pleine. Réessaie plus tard.'); break;
+    case 'joined':
+      setNames(m.name, null); break;
+    case 'lobby':
+      setNames(m.you.name, m.opp ? m.opp.name : 'Adversaire'); break;
+    case 'full':
+      setStatus('Partie pleine. Réessaie plus tard.'); btnReady.disabled = true; break;
     case 'start':
+      setNames(m.you.name, m.opp ? m.opp.name : 'Adversaire');
       showLives(m.lives.you, m.lives.opp); resetRoundUI();
-      el('btnRematch').hidden = true; el('btnRematch').disabled = false; el('countdown').textContent = '—';
+      el('btnRematch').hidden = true; el('btnRematch').disabled = false;
+      btnReady.textContent = 'Prêt ✓'; btnReady.disabled = true;
+      el('countdown').textContent = '—';
       setStatus('Match ! Prépare ton geste.');
       break;
     case 'countdown':
@@ -171,6 +197,7 @@ ws.addEventListener('message', ev => {
       break;
     case 'round':
       el('reveal').hidden = false;
+      setNames(m.you.name, m.opp.name);
       el('moveYou').textContent = MOVE_FR[m.you.move];
       el('moveOpp').textContent = MOVE_FR[m.opp.move];
       showLives(m.lives.you, m.lives.opp);
@@ -183,16 +210,36 @@ ws.addEventListener('message', ev => {
       el('countdown').textContent = m.winner === 'you' ? '🏆' : '💀';
       el('verdict').textContent = m.winner === 'you' ? 'VICTOIRE' : 'DÉFAITE';
       el('verdict').className = 'verdict ' + (m.winner === 'you' ? 'win' : 'lose');
-      el('btnRematch').hidden = false;
+      el('btnRematch').hidden = false; el('btnRematch').disabled = false;
+      setStatus('Match terminé. « Rejouer » pour la revanche.');
       break;
     case 'opponentLeft':
-      setStatus('Adversaire parti. En attente d\'un nouveau.'); resetRoundUI();
-      el('countdown').textContent = '—';
+      setStatus('Adversaire parti. Appuie sur « Prêt » quand un nouveau arrive.');
+      resetRoundUI(); el('countdown').textContent = '—';
+      el('nameOpp').textContent = 'Adversaire'; el('btnRematch').hidden = true;
+      btnReady.textContent = 'Prêt'; btnReady.disabled = false;  // serveur a remis notre ready a False
       break;
   }
 });
+
+function sendReady() {
+  if (!joined) {
+    ws.send(JSON.stringify({ type: 'join', name: nameInput.value.trim() }));
+    joined = true;
+    nameInput.disabled = true;
+  }
+  ws.send(JSON.stringify({ type: 'ready' }));
+}
+
+btnReady.addEventListener('click', () => {
+  if (nameInput.value.trim() === '') return;
+  sendReady();
+  btnReady.disabled = true; btnReady.textContent = 'Prêt ✓';
+  setStatus('Prêt — en attente de l\'adversaire…');
+});
+
 el('btnRematch').addEventListener('click', () => {
-  ws.send(JSON.stringify({ type: 'rematch' }));
+  ws.send(JSON.stringify({ type: 'ready' }));
   el('btnRematch').disabled = true;
   setStatus('Revanche demandée — en attente de l\'adversaire.');
 });
