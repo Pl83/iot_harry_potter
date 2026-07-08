@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Duel — Pierre Feuille Ciseaux (gestes)</title>
+<style>
+  :root { --page:#f9f9f7; --surface:#fcfcfb; --text:#0b0b0b; --muted:#898781;
+          --border:rgba(11,11,11,.10); --accent:#2a78d6; --win:#1baf7a; --lose:#d03b3b; }
+  @media (prefers-color-scheme: dark) {
+    :root { --page:#0d0d0d; --surface:#1a1a19; --text:#fff; --muted:#898781;
+            --border:rgba(255,255,255,.10); --accent:#3987e5; --win:#199e70; --lose:#e5564f; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--page); color:var(--text); padding:24px;
+         font-family:system-ui,-apple-system,"Segoe UI",sans-serif; }
+  header { display:flex; align-items:center; gap:16px; flex-wrap:wrap; margin-bottom:20px; }
+  h1 { font-size:18px; margin:0; font-weight:650; }
+  button { font:inherit; font-size:14px; font-weight:600; padding:8px 18px; border-radius:8px;
+           cursor:pointer; border:1px solid var(--border); background:var(--accent); color:#fff; }
+  button.secondary { background:var(--surface); color:var(--text); }
+  button:disabled { opacity:.45; cursor:default; }
+  input#name { font:inherit; font-size:14px; padding:8px 12px; border-radius:8px;
+               border:1px solid var(--border); background:var(--surface); color:var(--text); width:150px; }
+  input#name:disabled { opacity:.6; }
+  #status { font-size:13px; color:var(--muted); }
+  .panel { background:var(--surface); border:1px solid var(--border); border-radius:12px;
+           padding:20px; margin-bottom:20px; }
+  .lives { display:flex; justify-content:space-between; gap:20px; font-size:15px; font-weight:650; }
+  .hearts { letter-spacing:2px; font-size:20px; }
+  .countdown { text-align:center; font-size:64px; font-weight:800; min-height:80px; }
+  .reveal { display:flex; justify-content:space-around; align-items:center; text-align:center; gap:12px; }
+  .reveal .move { font-size:40px; font-weight:800; text-transform:capitalize; }
+  .reveal .who { font-size:13px; color:var(--muted); }
+  .verdict { text-align:center; font-size:26px; font-weight:800; margin-top:8px; min-height:34px; }
+  .verdict.win { color:var(--win); } .verdict.lose { color:var(--lose); }
+  .hint { font-size:12px; color:var(--muted); margin-top:8px; }
+  .mapping { font-size:13px; color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Duel — Pierre / Feuille / Ciseaux par gestes</h1>
+  <input id="name" type="text" maxlength="16" placeholder="Ton pseudo" autocomplete="off">
+  <button id="btnConnect" class="secondary">Connecter la carte</button>
+  <button id="btnReady" disabled>Prêt</button>
+  <span id="status">Entre ton pseudo, connecte ta carte, puis appuie sur « Prêt ».</span>
+</header>
+
+<section class="panel">
+  <div class="lives">
+    <span><span id="nameYou">Toi</span> : <span id="livesYou" class="hearts">— — —</span></span>
+    <span><span id="livesOpp" class="hearts">— — —</span> : <span id="nameOpp">Adversaire</span></span>
+  </div>
+</section>
+
+<section class="panel">
+  <div id="countdown" class="countdown">—</div>
+  <div id="reveal" class="reveal" hidden>
+    <div><div id="moveYou" class="move">?</div><div id="whoYou" class="who">toi</div></div>
+    <div style="font-size:24px;color:var(--muted)">vs</div>
+    <div><div id="moveOpp" class="move">?</div><div id="whoOpp" class="who">adversaire</div></div>
+  </div>
+  <div id="verdict" class="verdict"></div>
+  <button id="btnRematch" class="secondary" hidden>Rejouer</button>
+</section>
+
+<p class="mapping">Gestes : <strong>vertical</strong> = pierre · <strong>horizontal</strong> = feuille · <strong>circle</strong> = ciseaux. Exécute ton geste <strong>pendant le décompte</strong> — le modèle lit les 2 dernières secondes de l'accéléromètre.</p>
+
+<script src="movement_cnn_weights.js"></script>
+<script src="inference.js"></script>
+<script src="rps-moves.js"></script>
+<script>
+"use strict";
+const MOVE_FR = { rock:"pierre", paper:"feuille", scissors:"ciseaux", whiff:"raté" };
+const MAX_SAMPLES = 500;
+const samples = [];
+
+// ---------- Web Serial (identique au moniteur, accel + gyro) ----------
+const btnConnect = document.getElementById('btnConnect');
+const statusEl = document.getElementById('status');
+let port = null, reader = null, keepReading = false;
+function setStatus(m) { statusEl.textContent = m; }
+
+async function connect() {
+  if (!('serial' in navigator)) { setStatus('Web Serial indisponible — Chrome ou Edge.'); return; }
+  try { port = await navigator.serial.requestPort(); await port.open({ baudRate: 115200 }); }
+  catch (e) { if (e.name !== 'NotFoundError') setStatus('Ouverture impossible : ' + e.message); port = null; return; }
+  btnConnect.disabled = true;
+  btnConnect.textContent = 'Carte connectée ✓';
+  setStatus('Carte connectée. Entre ton pseudo et appuie sur « Prêt ».');
+  keepReading = true; readLoop();
+}
+async function readLoop() {
+  const dec = new TextDecoder(); let carry = '';
+  try {
+    while (keepReading && port.readable) {
+      reader = port.readable.getReader();
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          carry += dec.decode(value, { stream: true });
+          const lines = carry.split('\n'); carry = lines.pop();
+          for (const line of lines) handleLine(line);
+        }
+      } finally { reader.releaseLock(); reader = null; }
+    }
+  } catch (e) { if (keepReading) setStatus('Liaison perdue : ' + e.message); }
+}
+function handleLine(line) {
+  const p = line.trim().split(/\s+/);
+  if (p.length !== 6) return;
+  const v = p.map(Number);
+  if (v.some(x => !Number.isFinite(x))) return;
+  samples.push({ a: [v[0], v[1], v[2]], g: [v[3], v[4], v[5]] });
+  if (samples.length > MAX_SAMPLES) samples.shift();
+}
+btnConnect.addEventListener('click', connect);
+
+// Mode démo : #demo injecte un geste 'vertical' synthétique (secousse sur ax).
+if (location.hash === '#demo') {
+  setStatus('Mode démo — geste vertical synthétique.');
+  setInterval(() => {
+    const t = performance.now() / 1000;
+    samples.push({ a: [3 * Math.sin(t * 6), 0.2 * Math.cos(t), 9.81], g: [0, 0, 0] });
+    if (samples.length > MAX_SAMPLES) samples.shift();
+  }, 20);
+}
+
+// ---------- Capture du geste (à GO) ----------
+const WIN = MovementModel.ready ? MovementModel.seqLen : 100;
+function currentMove() {
+  if (samples.length < WIN) return { move: "whiff", conf: 0 };
+  const win = samples.slice(-WIN);
+  const ch = [new Float64Array(WIN), new Float64Array(WIN), new Float64Array(WIN)];
+  for (let i = 0; i < WIN; i++) { const a = win[i].a; ch[0][i]=a[0]; ch[1][i]=a[1]; ch[2][i]=a[2]; }
+  for (let c = 0; c < 3; c++) {
+    let mean = 0; for (let i=0;i<WIN;i++) mean += ch[c][i]; mean /= WIN;
+    let vv = 0; for (let i=0;i<WIN;i++){ const d=ch[c][i]-mean; vv += d*d; } vv /= WIN;
+    const sd = Math.sqrt(vv) || 1e-8;
+    for (let i=0;i<WIN;i++) ch[c][i] = (ch[c][i]-mean)/sd;
+  }
+  const probs = MovementModel.softmax(MovementModel.forward(ch));
+  let best = 0; for (let i=1;i<probs.length;i++) if (probs[i]>probs[best]) best=i;
+  const className = MovementModel.classes[best];
+  return { move: RPS.classifyMove(className, probs[best]), conf: probs[best] };
+}
+
+// ---------- UI ----------
+const el = id => document.getElementById(id);
+function hearts(n) { return "❤".repeat(Math.max(0, n)) + "·".repeat(Math.max(0, 3 - n)); }
+function showLives(you, opp) { el('livesYou').textContent = hearts(you); el('livesOpp').textContent = hearts(opp); }
+function resetRoundUI() { el('reveal').hidden = true; el('verdict').textContent = ''; el('verdict').className = 'verdict'; }
+
+// ---------- Pseudo + bouton Prêt ----------
+const nameInput = el('name');
+const btnReady = el('btnReady');
+let joined = false;
+
+function setNames(you, opp) {
+  if (you) { el('nameYou').textContent = you; el('whoYou').textContent = you; }
+  if (opp) { el('nameOpp').textContent = opp; el('whoOpp').textContent = opp; }
+}
+
+nameInput.addEventListener('input', () => {
+  if (!joined) btnReady.disabled = nameInput.value.trim() === '';
+});
+
+// ---------- WebSocket ----------
+const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+ws.addEventListener('open', () => setStatus('Connecté. Entre ton pseudo et appuie sur « Prêt ».'));
+ws.addEventListener('close', () => setStatus('Déconnecté du serveur.'));
+ws.addEventListener('message', ev => {
+  const m = JSON.parse(ev.data);
+  switch (m.type) {
+    case 'joined':
+      setNames(m.name, null); break;
+    case 'lobby':
+      setNames(m.you.name, m.opp ? m.opp.name : 'Adversaire'); break;
+    case 'full':
+      setStatus('Partie pleine. Réessaie plus tard.'); btnReady.disabled = true; break;
+    case 'start':
+      setNames(m.you.name, m.opp ? m.opp.name : 'Adversaire');
+      showLives(m.lives.you, m.lives.opp); resetRoundUI();
+      el('btnRematch').hidden = true; el('btnRematch').disabled = false;
+      btnReady.textContent = 'Prêt ✓'; btnReady.disabled = true;
+      el('countdown').textContent = '—';
+      setStatus('Match ! Prépare ton geste.');
+      break;
+    case 'countdown':
+      resetRoundUI(); el('countdown').textContent = m.n; break;
+    case 'go':
+      el('countdown').textContent = 'GO';
+      const mv = currentMove();
+      ws.send(JSON.stringify({ type: 'move', move: mv.move, conf: mv.conf }));
+      break;
+    case 'round':
+      el('reveal').hidden = false;
+      setNames(m.you.name, m.opp.name);
+      el('moveYou').textContent = MOVE_FR[m.you.move];
+      el('moveOpp').textContent = MOVE_FR[m.opp.move];
+      showLives(m.lives.you, m.lives.opp);
+      const v = el('verdict');
+      if (m.winner === 'you') { v.textContent = 'Round gagné !'; v.className = 'verdict win'; }
+      else if (m.winner === 'opp') { v.textContent = 'Round perdu.'; v.className = 'verdict lose'; }
+      else { v.textContent = 'Égalité.'; v.className = 'verdict'; }
+      break;
+    case 'matchOver':
+      el('countdown').textContent = m.winner === 'you' ? '🏆' : '💀';
+      el('verdict').textContent = m.winner === 'you' ? 'VICTOIRE' : 'DÉFAITE';
+      el('verdict').className = 'verdict ' + (m.winner === 'you' ? 'win' : 'lose');
+      el('btnRematch').hidden = false; el('btnRematch').disabled = false;
+      setStatus('Match terminé. « Rejouer » pour la revanche.');
+      break;
+    case 'opponentLeft':
+      setStatus('Adversaire parti. Appuie sur « Prêt » quand un nouveau arrive.');
+      resetRoundUI(); el('countdown').textContent = '—';
+      el('nameOpp').textContent = 'Adversaire'; el('btnRematch').hidden = true;
+      btnReady.textContent = 'Prêt'; btnReady.disabled = false;  // serveur a remis notre ready a False
+      break;
+  }
+});
+
+function sendReady() {
+  if (!joined) {
+    ws.send(JSON.stringify({ type: 'join', name: nameInput.value.trim() }));
+    joined = true;
+    nameInput.disabled = true;
+  }
+  ws.send(JSON.stringify({ type: 'ready' }));
+}
+
+btnReady.addEventListener('click', () => {
+  if (nameInput.value.trim() === '') return;
+  sendReady();
+  btnReady.disabled = true; btnReady.textContent = 'Prêt ✓';
+  setStatus('Prêt — en attente de l\'adversaire…');
+});
+
+el('btnRematch').addEventListener('click', () => {
+  ws.send(JSON.stringify({ type: 'ready' }));
+  el('btnRematch').disabled = true;
+  setStatus('Revanche demandée — en attente de l\'adversaire.');
+});
+</script>
+</body>
+</html>
